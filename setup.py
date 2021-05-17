@@ -32,6 +32,7 @@ setup(
             "data_transformation.time_series_binner.DistilTimeSeriesBinner = distil_primitives_contrib.time_series_binner:TimeSeriesBinnerPrimitive",
             "remote_sensing.remote_sensing_pretrained.PrefeaturisedPooler = distil_primitives_contrib.prefeaturised_pooler:PrefeaturisedPoolingPrimitive",
             "data_transformation.fuzzy_join.DistilFuzzyJoin = distil_primitives_contrib.fuzzy_join:FuzzyJoinPrimitive",
+            "feature_selection.mutual_info_classif.DistilMIRanking = distil_primitives_contrib.mi_ranking:MIRankingPrimitive",
         ],
     },
 )
