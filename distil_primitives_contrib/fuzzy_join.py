@@ -106,6 +106,13 @@ class Hyperparams(hyperparams.Hyperparams):
         ],
         description="The type of join between two dataframes.",
     )
+    absolute_accuracy = hyperparams.UniformBool(
+        default=False,
+        semantic_types=[
+            "https://metadata.datadrivendiscovery.org/types/ControlParameter"
+        ],
+        description="Used for numeric to use absolute comparison instead of percentage.",
+    )
 
 
 class FuzzyJoinPrimitive(
@@ -197,14 +204,14 @@ class FuzzyJoinPrimitive(
             ) from error
 
         accuracy = self.hyperparams["accuracy"]
-        if type(accuracy) == float:
+        if type(accuracy) == float and not self.hyperparams["absolute_accuracy"]:
             if accuracy <= 0.0 or accuracy > 1.0:
                 raise exceptions.InvalidArgumentValueError(
                     "accuracy of " + str(accuracy) + " is out of range"
                 )
-        else:
+        elif type(accuracy) == list:
             for acc in accuracy:
-                if acc <= 0.0 or acc > 1.0:
+                if acc <= 0.0 or acc > 1.0 and not self.hyperparams["absolute_accuracy"]:
                     raise exceptions.InvalidArgumentValueError(
                         "accuracy of " + str(acc) + " is out of range"
                     )
@@ -268,6 +275,7 @@ class FuzzyJoinPrimitive(
                     right_col[col_index],
                     accuracy[col_index],
                     col_index,
+                    self.hyperparams["absolute_accuracy"],
                 )
                 left_df[new_left_df.columns] = new_left_df
                 right_name = "righty_numeric" + str(col_index)
@@ -284,6 +292,7 @@ class FuzzyJoinPrimitive(
                     right_col[col_index],
                     accuracy[col_index],
                     col_index,
+                    self.hyperparams["absolute_accuracy"],
                 )
                 left_df[new_left_df.columns] = new_left_df
                 right_df[new_right_df.columns] = new_right_df
@@ -324,7 +333,7 @@ class FuzzyJoinPrimitive(
 
         # don't want to keep columns that were created specifically for merging
         # also, inner merge keeps the right column we merge on, we want to remove it
-        joined.drop(columns=np.unique(new_left_cols + new_right_cols), inplace=True)
+        joined.drop(columns=new_left_cols + new_right_cols, inplace=True)
 
         # create a new dataset to hold the joined data
         resource_map = {}
@@ -476,31 +485,38 @@ class FuzzyJoinPrimitive(
         index: int,
     ) -> pd.DataFrame:
 
-        left_keys = left_df[left_col].unique()
-        right_keys = right_df[right_col].unique()
-        matches: typing.Dict[str, typing.Optional[str]] = {}
-        for left_key in left_keys:
-            matches[left_key] = cls._string_fuzzy_match(
-                left_key, right_keys, accuracy * 100
+        if accuracy < 1:
+            left_keys = left_df[left_col].unique()
+            right_keys = right_df[right_col].unique()
+            matches: typing.Dict[str, typing.Optional[str]] = {}
+            for left_key in left_keys:
+                matches[left_key] = cls._string_fuzzy_match(
+                    left_key, right_keys, accuracy * 100
+                )
+            new_left_df = container.DataFrame(
+                {
+                    "lefty_string"
+                    + str(index): left_df[left_col].map(lambda key: matches[key])
+                }
             )
-        new_left_df = container.DataFrame(
-            {
-                "lefty_string"
-                + str(index): left_df[left_col].map(lambda key: matches[key])
-            }
-        )
+        else:
+            new_left_df = container.DataFrame(
+                {"lefty_string" + str(index): left_df[left_col]}
+            )
         return new_left_df
 
-    def _numeric_fuzzy_match(match, choices, accuracy):
+    def _numeric_fuzzy_match(match, choices, accuracy, is_absolute):
         # not sure if this is faster than applying a lambda against the sequence - probably is
-        inv_accuracy = 1.0 - accuracy
         min_distance = float("inf")
         min_val = float("nan")
-        tolerance = float(match) * inv_accuracy
+        if is_absolute:
+            tolerance = accuracy
+        else:
+            inv_accuracy = 1.0 - accuracy
+            tolerance = float(match) * inv_accuracy
         for i, num in enumerate(choices):
             distance = abs(match - num)
             if distance <= tolerance and distance <= min_distance:
-                min_diff = distance
                 min_val = num
         return min_val
 
@@ -513,30 +529,20 @@ class FuzzyJoinPrimitive(
         right_col: str,
         accuracy: float,
         index: int,
+        is_absolute: bool,
     ) -> pd.DataFrame:
         choices = right_df[right_col].unique()
         new_left_df = container.DataFrame(
             {
                 "lefty_numeric"
                 + str(index): pd.to_numeric(left_df[left_col]).map(
-                    lambda x: cls._numeric_fuzzy_match(x, choices, accuracy)
+                    lambda x: cls._numeric_fuzzy_match(
+                        x, choices, accuracy, is_absolute
+                    )
                 )
             }
         )
         return new_left_df
-
-    @classmethod
-    def _vector_fuzzy_match(cls, match, choices, accuracy):
-        tolerance = match * (1 - accuracy)
-        min_distance = float("inf")
-        min_val = None
-        for i in range(choices.shape[0]):
-            num = choices[i, :]
-            distance = abs(match - num)
-            if np.all(distance <= tolerance) and np.all(distance <= min_distance):
-                min_diff = distance
-                min_val = num
-        return min_val
 
     @classmethod
     def _create_vector_merging_cols(
@@ -547,6 +553,7 @@ class FuzzyJoinPrimitive(
         right_col: str,
         accuracy: float,
         index: int,
+        is_absolute: bool,
     ) -> pd.DataFrame:
         def fromstring(x: str) -> np.ndarray:
             return np.fromstring(x, dtype=float, sep=",")
@@ -603,7 +610,10 @@ class FuzzyJoinPrimitive(
         for i in range(len(new_left_cols)):
             new_left_df[new_left_cols[i]] = new_left_df[new_left_cols[i]].map(
                 lambda x: cls._numeric_fuzzy_match(
-                    x, new_right_df[new_right_cols[i]], accuracy
+                    x,
+                    new_right_df[new_right_cols[i]],
+                    accuracy,
+                    is_absolute,
                 )
             )
         return (new_left_df, new_right_df)
