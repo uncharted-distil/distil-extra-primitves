@@ -106,8 +106,19 @@ class Hyperparams(hyperparams.Hyperparams):
         ],
         description="The type of join between two dataframes.",
     )
-    absolute_accuracy = hyperparams.UniformBool(
-        default=False,
+    absolute_accuracy = hyperparams.Union[typing.Union[bool, typing.Sequence[bool]]](
+        configuration=collections.OrderedDict(
+            set=hyperparams.List(
+                elements=hyperparams.UniformBool(False),
+                default=(),
+                semantic_types=[
+                    "https://metadata.datadrivendiscovery.org/types/ControlParameter"
+                ],
+                description="A list of flags for absolute values, corresponding respectively to the columns to join on.",
+            ),
+            bool=hyperparams.UniformBool(False),
+        ),
+        default="bool",
         semantic_types=[
             "https://metadata.datadrivendiscovery.org/types/ControlParameter"
         ],
@@ -204,14 +215,27 @@ class FuzzyJoinPrimitive(
             ) from error
 
         accuracy = self.hyperparams["accuracy"]
-        if type(accuracy) == float and not self.hyperparams["absolute_accuracy"]:
+        absolute_accuracy = self.hyperparams["absolute_accuracy"]
+        if type(accuracy) == float and not type(self.hyperparams["absolute_accuracy"]) == bool:
+            raise exceptions.InvalidArgumentValueError(
+                "only 1 value of accuracy provided, but multiple values for absolute accuracy provided"
+            )
+        if not type(accuracy) == float and type(self.hyperparams["absolute_accuracy"]) == bool:
+            raise exceptions.InvalidArgumentValueError(
+                "only 1 for absolute accuracy provided, but multiple values of accuracy provided"
+            )
+        if type(accuracy) == float and not absolute_accuracy:
             if accuracy <= 0.0 or accuracy > 1.0:
                 raise exceptions.InvalidArgumentValueError(
                     "accuracy of " + str(accuracy) + " is out of range"
                 )
-        elif type(accuracy) == list:
-            for acc in accuracy:
-                if acc <= 0.0 or acc > 1.0 and not self.hyperparams["absolute_accuracy"]:
+        elif type(accuracy) == tuple and type(absolute_accuracy) == tuple:
+            if not len(accuracy) == len(absolute_accuracy):
+                raise exceptions.InvalidArgumentValueError(
+                    "the count of accuracy hyperparams does not match the count of absolute_accuracy hyperparams"
+                )
+            for i in range(len(accuracy)):
+                if (accuracy[i] <= 0.0 or accuracy[i] > 1.0) and not absolute_accuracy[i]:
                     raise exceptions.InvalidArgumentValueError(
                         "accuracy of " + str(acc) + " is out of range"
                     )
@@ -275,7 +299,7 @@ class FuzzyJoinPrimitive(
                     right_col[col_index],
                     accuracy[col_index],
                     col_index,
-                    self.hyperparams["absolute_accuracy"],
+                    absolute_accuracy[col_index],
                 )
                 left_df[new_left_df.columns] = new_left_df
                 right_name = "righty_numeric" + str(col_index)
@@ -292,7 +316,7 @@ class FuzzyJoinPrimitive(
                     right_col[col_index],
                     accuracy[col_index],
                     col_index,
-                    self.hyperparams["absolute_accuracy"],
+                    absolute_accuracy[col_index],
                 )
                 left_df[new_left_df.columns] = new_left_df
                 right_df[new_right_df.columns] = new_right_df
