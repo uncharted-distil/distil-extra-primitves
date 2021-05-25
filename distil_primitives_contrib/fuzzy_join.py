@@ -229,13 +229,12 @@ class FuzzyJoinPrimitive(
                 raise exceptions.InvalidArgumentValueError(
                     "accuracy of " + str(accuracy) + " is out of range"
                 )
-        elif type(accuracy) == list and type(absolute_accuracy) == list:
+        elif type(accuracy) == tuple and type(absolute_accuracy) == tuple:
             if not len(accuracy) == len(absolute_accuracy):
                 raise exceptions.InvalidArgumentValueError(
                     "the count of accuracy hyperparams does not match the count of absolute_accuracy hyperparams"
                 )
             for i in range(len(accuracy)):
-                print(f'CHECKING INDEX {i}')
                 if (accuracy[i] <= 0.0 or accuracy[i] > 1.0) and not absolute_accuracy[i]:
                     raise exceptions.InvalidArgumentValueError(
                         "accuracy of " + str(acc) + " is out of range"
