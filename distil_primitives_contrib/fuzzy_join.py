@@ -5,10 +5,13 @@ import collections
 import pandas as pd  # type: ignore
 import numpy as np
 
+import haversine as hs
+
 from d3m import container, exceptions, utils as d3m_utils
 from d3m.base import utils as d3m_base_utils
 from d3m.metadata import base as metadata_base, hyperparams
 from d3m.primitive_interfaces import base, transformer
+from haversine import Unit
 from fuzzywuzzy import process
 from dateutil import parser
 import version
@@ -147,12 +150,17 @@ class FuzzyJoinPrimitive(
         ("https://metadata.datadrivendiscovery.org/types/FloatVector",)
     )
 
+    _GEO_JOIN_TYPES = set(
+        ("https://metadata.datadrivendiscovery.org/types/BoundingPolygon",)
+    )
+
     _DATETIME_JOIN_TYPES = set(("http://schema.org/DateTime",))
 
     _SUPPORTED_TYPES = (
         _STRING_JOIN_TYPES.union(_NUMERIC_JOIN_TYPES)
         .union(_DATETIME_JOIN_TYPES)
         .union(_VECTOR_JOIN_TYPES)
+        .union(_GEO_JOIN_TYPES)
     )
 
     __author__ = ("Uncharted Software",)
@@ -310,6 +318,21 @@ class FuzzyJoinPrimitive(
                 new_right_cols.append(right_name)
             elif join_types[col_index] in self._VECTOR_JOIN_TYPES:
                 new_left_df, new_right_df = self._create_vector_merging_cols(
+                    left_df,
+                    left_col[col_index],
+                    right_df,
+                    right_col[col_index],
+                    accuracy[col_index],
+                    col_index,
+                    absolute_accuracy[col_index],
+                )
+                left_df[new_left_df.columns] = new_left_df
+                right_df[new_right_df.columns] = new_right_df
+                new_left_cols += list(new_left_df.columns)
+                new_right_cols += list(new_right_df.columns)
+                right_cols_to_drop.append(right_col[col_index])
+            elif join_types[col_index] in self._VECTOR_JOIN_TYPES:
+                new_left_df, new_right_df = self._create_geo_vector_merging_cols(
                     left_df,
                     left_col[col_index],
                     right_df,
@@ -542,6 +565,22 @@ class FuzzyJoinPrimitive(
             distance = abs(match - num)
             if distance <= tolerance and distance <= min_distance:
                 min_val = num
+                min_distance = distance
+        return min_val
+
+    def _geo_fuzzy_match(match, choices, accuracy, is_absolute):
+        # assume the accuracy is meters
+        if not is_absolute:
+            raise exceptions.InvalidArgumentTypeError(
+                "geo fuzzy match requires an absolute accuracy parameter that specifies the tolerance in meters"
+            )
+        min_distance = float("inf")
+        min_val = None
+        for i, point in enumerate(choices):
+            distance = abs(hs.haversine(match, point, Unit.METERS))
+            if distance <= accuracy and distance <= min_distance:
+                min_val = point
+                min_distance = distance
         return min_val
 
     @classmethod
@@ -567,6 +606,86 @@ class FuzzyJoinPrimitive(
             }
         )
         return new_left_df
+
+    @classmethod
+    def _create_geo_vector_merging_cols(
+        cls,
+        left_df: container.DataFrame,
+        left_col: str,
+        right_df: container.DataFrame,
+        right_col: str,
+        accuracy: float,
+        index: int,
+        is_absolute: bool,
+    ) -> pd.DataFrame:
+        def fromstring(x: str) -> np.ndarray:
+            return np.fromstring(x, dtype=float, sep=",")
+        def topoints(x: np.ndarray) -> typing.Sequence[typing.Sequence[float]]:
+            # create a sequence of points by joining two successive values
+            it = iter(x)
+            return list(zip(it, it))
+
+        if type(left_df[left_col][0]) == str:
+            left_vector_length = np.fromstring(
+                left_df[left_col][0], dtype=float, sep=","
+            ).shape[0]
+            new_left_cols = [
+                "lefty_vector" + str(index) + "_" + str(i)
+                for i in range(left_vector_length/2)
+            ]
+            new_left_df = container.DataFrame(
+                left_df[left_col]
+                .apply(fromstring, convert_dtype=False)
+                .apply(topoints)
+                .values.tolist(),
+                columns=new_left_cols,
+            )
+        else:
+            left_vector_length = left_df[left_col][0].shape[0]
+            new_left_cols = [
+                "lefty_vector" + str(index) + "_" + str(i)
+                for i in range(left_vector_length/2)
+            ]
+            new_left_df = container.DataFrame(
+                left_df[left_col].apply(topoints).values.tolist(),
+                columns=new_left_cols,
+            )
+        if type(right_df[right_col][0]) == str:
+            right_vector_length = np.fromstring(
+                right_df[right_col][0], dtype=float, sep=","
+            ).shape[0]
+            new_right_cols = [
+                "righty_vector" + str(index) + "_" + str(i)
+                for i in range(right_vector_length/2)
+            ]
+            new_right_df = container.DataFrame(
+                right_df[right_col]
+                .apply(fromstring, convert_dtype=False)
+                .apply(topoints)
+                .values.tolist(),
+                columns=new_right_cols,
+            )
+        else:
+            right_vector_length = right_df[right_col][0].shape[0]
+            new_right_cols = [
+                "righty_vector" + str(index) + "_" + str(i)
+                for i in range(right_vector_length/2)
+            ]
+            new_right_df = container.DataFrame(
+                right_df[right_col].apply(topoints).values.tolist(),
+                columns=new_right_cols,
+            )
+
+        for i in range(len(new_left_cols)):
+            new_left_df[new_left_cols[i]] = new_left_df[new_left_cols[i]].map(
+                lambda x: cls._geo_fuzzy_match(
+                    x,
+                    new_right_df[new_right_cols[i]],
+                    accuracy,
+                    is_absolute,
+                )
+            )
+        return (new_left_df, new_right_df)
 
     @classmethod
     def _create_vector_merging_cols(
