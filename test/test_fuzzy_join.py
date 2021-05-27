@@ -152,6 +152,7 @@ class FuzzyJoinPrimitiveTestCase(unittest.TestCase):
                 "left_col": "whiskey",
                 "right_col": "xray",
                 "accuracy": 0.9,
+                "absolute_accuracy": False,
             }
         )
         fuzzy_join = FuzzyJoin(hyperparams=hyperparams)
@@ -272,6 +273,115 @@ class FuzzyJoinPrimitiveTestCase(unittest.TestCase):
             self.assertNumpyListEqual(
                 list(result_dataframe["charlie"]),
                 [200.0, 200.0, 200.0, 200.0, np.nan, np.nan, np.nan, np.nan],
+            )
+        )
+
+    def test_geo_join(self) -> None:
+        dataframe_1 = self._load_data(self._dataset_path_1)
+        dataframe_2 = self._load_data(self._dataset_path_2)
+        dataframe_1.metadata = dataframe_1.metadata.add_semantic_type(
+            ('0', metadata_base.ALL_ELEMENTS, 5),
+            "https://metadata.datadrivendiscovery.org/types/BoundingPolygon",
+        )
+        dataframe_2.metadata = dataframe_2.metadata.add_semantic_type(
+            ('0', metadata_base.ALL_ELEMENTS, 5),
+            "https://metadata.datadrivendiscovery.org/types/BoundingPolygon",
+        )
+
+        hyperparams_class = FuzzyJoin.metadata.query()["primitive_code"][
+            "class_type_arguments"
+        ]["Hyperparams"]
+        hyperparams = hyperparams_class.defaults().replace(
+            {
+                "left_col": "gamma",
+                "right_col": "gamma",
+                "accuracy": 15600,
+                "absolute_accuracy": True
+            }
+        )
+        fuzzy_join = FuzzyJoin(hyperparams=hyperparams)
+        result_dataset = fuzzy_join.produce(left=dataframe_1, right=dataframe_2).value
+        result_dataframe = result_dataset["0"]
+        self.assertListEqual(
+            list(result_dataframe.columns),
+            [
+                "d3mIndex",
+                "alpha_left",
+                "bravo",
+                "whiskey",
+                "sierra",
+                "gamma",
+                "alpha_right",
+                "charlie",
+                "xray",
+                "tango",
+            ],
+        )
+        self.assertListEqual(
+            list(result_dataframe["d3mIndex"]),
+            [
+                1,
+                2,
+                3,
+                4,
+                5,
+                6,
+                7,
+                8,
+            ],
+        )
+        self.assertListEqual(
+            list(result_dataframe["alpha_left"]),
+            [
+                "yankee",
+                "yankeee",
+                "yank",
+                "Hotel",
+                "hotel",
+                "otel",
+                "foxtrot aa",
+                "foxtrot",
+            ],
+        )
+        self.assertListEqual(
+            list(result_dataframe["bravo"]),
+            [
+                1.0,
+                2.0,
+                3.0,
+                4.0,
+                5.0,
+                6.0,
+                7.0,
+                8.0,
+            ],
+        )
+        self.assertListEqual(
+            [row.tolist() for row in result_dataframe["gamma"]],
+            [
+                [10.0, 20.0],
+                [5.0, 3.0],
+                [30.0, 52.0],
+                [5.0, 3.0],
+                [10.0, 20.0],
+                [13.0, 13.0],
+                [13.0, 13.0],
+                [3.0, 5.0],
+            ],
+        )
+        self.assertTrue(
+            self.assertNumpyListEqual(
+                list(result_dataframe["alpha_right"]),
+                [
+                    "yankee",
+                    np.nan,
+                    np.nan,
+                    np.nan,
+                    "yankee",
+                    "foxtrot",
+                    "foxtrot",
+                    "golf",
+                ],
             )
         )
 
@@ -448,6 +558,7 @@ class FuzzyJoinPrimitiveTestCase(unittest.TestCase):
                 "left_col": ["alpha", "sierra"],
                 "right_col": ["alpha", "tango"],
                 "accuracy": [0.9, 0.8],
+                "absolute_accuracy": [False, False],
             }
         )
         fuzzy_join = FuzzyJoin(hyperparams=hyperparams)
@@ -508,6 +619,7 @@ class FuzzyJoinPrimitiveTestCase(unittest.TestCase):
                 "left_col": ["sierra", "gamma"],
                 "right_col": ["tango", "gamma"],
                 "accuracy": [0.8, 0.95],
+                "absolute_accuracy": [False, False],
             }
         )
         fuzzy_join = FuzzyJoin(hyperparams=hyperparams)

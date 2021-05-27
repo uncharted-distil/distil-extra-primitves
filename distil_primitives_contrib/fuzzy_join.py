@@ -224,11 +224,13 @@ class FuzzyJoinPrimitive(
 
         accuracy = self.hyperparams["accuracy"]
         absolute_accuracy = self.hyperparams["absolute_accuracy"]
-        if type(accuracy) == float and not type(self.hyperparams["absolute_accuracy"]) == bool:
+        if not type(accuracy) == list:
+            accuracy = float(accuracy)
+        if type(accuracy) == float and not type(absolute_accuracy) == bool:
             raise exceptions.InvalidArgumentValueError(
                 "only 1 value of accuracy provided, but multiple values for absolute accuracy provided"
             )
-        if not type(accuracy) == float and type(self.hyperparams["absolute_accuracy"]) == bool:
+        if (not type(accuracy) == float) and type(absolute_accuracy) == bool:
             raise exceptions.InvalidArgumentValueError(
                 "only 1 for absolute accuracy provided, but multiple values of accuracy provided"
             )
@@ -264,6 +266,7 @@ class FuzzyJoinPrimitive(
             left_col = [left_col]
             right_col = [right_col]
             accuracy = [accuracy]
+            absolute_accuracy = [absolute_accuracy]
 
         join_types = [
             self._get_join_semantic_type(
@@ -283,7 +286,7 @@ class FuzzyJoinPrimitive(
         for col_index in range(len(left_col)):
             # depending on the joining type, make a new dataframe that has columns we will want to merge on
             # keep track of which columns we will want to drop later on
-            if join_types[col_index] in self._STRING_JOIN_TYPES:
+            if len(self._STRING_JOIN_TYPES.intersection(join_types[col_index])) > 0:
                 new_left_df = self._create_string_merge_cols(
                     left_df,
                     left_col[col_index],
@@ -299,7 +302,7 @@ class FuzzyJoinPrimitive(
                 )
                 new_left_cols += list(new_left_df.columns)
                 new_right_cols.append(right_name)
-            elif join_types[col_index] in self._NUMERIC_JOIN_TYPES:
+            elif len(self._NUMERIC_JOIN_TYPES.intersection(join_types[col_index])) > 0:
                 new_left_df = self._create_numeric_merge_cols(
                     left_df,
                     left_col[col_index],
@@ -316,22 +319,7 @@ class FuzzyJoinPrimitive(
                 )
                 new_left_cols += list(new_left_df.columns)
                 new_right_cols.append(right_name)
-            elif join_types[col_index] in self._VECTOR_JOIN_TYPES:
-                new_left_df, new_right_df = self._create_vector_merging_cols(
-                    left_df,
-                    left_col[col_index],
-                    right_df,
-                    right_col[col_index],
-                    accuracy[col_index],
-                    col_index,
-                    absolute_accuracy[col_index],
-                )
-                left_df[new_left_df.columns] = new_left_df
-                right_df[new_right_df.columns] = new_right_df
-                new_left_cols += list(new_left_df.columns)
-                new_right_cols += list(new_right_df.columns)
-                right_cols_to_drop.append(right_col[col_index])
-            elif join_types[col_index] in self._VECTOR_JOIN_TYPES:
+            elif len(self._GEO_JOIN_TYPES.intersection(join_types[col_index])) > 0:
                 new_left_df, new_right_df = self._create_geo_vector_merging_cols(
                     left_df,
                     left_col[col_index],
@@ -346,7 +334,22 @@ class FuzzyJoinPrimitive(
                 new_left_cols += list(new_left_df.columns)
                 new_right_cols += list(new_right_df.columns)
                 right_cols_to_drop.append(right_col[col_index])
-            elif join_types[col_index] in self._DATETIME_JOIN_TYPES:
+            elif len(self._VECTOR_JOIN_TYPES.intersection(join_types[col_index])) > 0:
+                new_left_df, new_right_df = self._create_vector_merging_cols(
+                    left_df,
+                    left_col[col_index],
+                    right_df,
+                    right_col[col_index],
+                    accuracy[col_index],
+                    col_index,
+                    absolute_accuracy[col_index],
+                )
+                left_df[new_left_df.columns] = new_left_df
+                right_df[new_right_df.columns] = new_right_df
+                new_left_cols += list(new_left_df.columns)
+                new_right_cols += list(new_right_df.columns)
+                right_cols_to_drop.append(right_col[col_index])
+            elif len(self._DATETIME_JOIN_TYPES.intersection(join_types[col_index])) > 0:
                 new_left_df, new_right_df = self._create_datetime_merge_cols(
                     left_df,
                     left_col[col_index],
@@ -466,7 +469,7 @@ class FuzzyJoinPrimitive(
         right: container.Dataset,
         right_resource_id: str,
         right_col: str,
-    ) -> typing.Optional[str]:
+    ) -> typing.Sequence[str]:
         # get semantic types for left and right cols
         left_types = cls._get_column_semantic_type(left, left_resource_id, left_col)
         right_types = cls._get_column_semantic_type(right, right_resource_id, right_col)
@@ -491,9 +494,7 @@ class FuzzyJoinPrimitive(
                 # no exact match, but any text-based type is allowed to join
                 join_types = ["http://schema.org/Text"]
 
-        if len(join_types) > 0:
-            return join_types[0]
-        return None
+        return join_types
 
     @classmethod
     def _get_column_semantic_type(
@@ -631,7 +632,7 @@ class FuzzyJoinPrimitive(
             ).shape[0]
             new_left_cols = [
                 "lefty_vector" + str(index) + "_" + str(i)
-                for i in range(left_vector_length/2)
+                for i in range(int(left_vector_length/2))
             ]
             new_left_df = container.DataFrame(
                 left_df[left_col]
@@ -644,7 +645,7 @@ class FuzzyJoinPrimitive(
             left_vector_length = left_df[left_col][0].shape[0]
             new_left_cols = [
                 "lefty_vector" + str(index) + "_" + str(i)
-                for i in range(left_vector_length/2)
+                for i in range(int(left_vector_length/2))
             ]
             new_left_df = container.DataFrame(
                 left_df[left_col].apply(topoints).values.tolist(),
@@ -656,7 +657,7 @@ class FuzzyJoinPrimitive(
             ).shape[0]
             new_right_cols = [
                 "righty_vector" + str(index) + "_" + str(i)
-                for i in range(right_vector_length/2)
+                for i in range(int(right_vector_length/2))
             ]
             new_right_df = container.DataFrame(
                 right_df[right_col]
@@ -669,7 +670,7 @@ class FuzzyJoinPrimitive(
             right_vector_length = right_df[right_col][0].shape[0]
             new_right_cols = [
                 "righty_vector" + str(index) + "_" + str(i)
-                for i in range(right_vector_length/2)
+                for i in range(int(right_vector_length/2))
             ]
             new_right_df = container.DataFrame(
                 right_df[right_col].apply(topoints).values.tolist(),
