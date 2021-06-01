@@ -224,8 +224,16 @@ class FuzzyJoinPrimitive(
 
         accuracy = self.hyperparams["accuracy"]
         absolute_accuracy = self.hyperparams["absolute_accuracy"]
-        if not type(accuracy) == list:
+
+        # hyperparams may be parsed as tuples
+        # floats could be integers if round number is passed in
+        if isinstance(accuracy, collections.Iterable):
+            accuracy = [float(a) for a in accuracy]
+        else:
             accuracy = float(accuracy)
+        if isinstance(absolute_accuracy, collections.Iterable):
+            absolute_accuracy = list(absolute_accuracy)
+
         if type(accuracy) == float and not type(absolute_accuracy) == bool:
             raise exceptions.InvalidArgumentValueError(
                 "only 1 value of accuracy provided, but multiple values for absolute accuracy provided"
@@ -239,7 +247,7 @@ class FuzzyJoinPrimitive(
                 raise exceptions.InvalidArgumentValueError(
                     "accuracy of " + str(accuracy) + " is out of range"
                 )
-        elif type(accuracy) == tuple and type(absolute_accuracy) == tuple:
+        elif type(accuracy) == list and type(absolute_accuracy) == list:
             if not len(accuracy) == len(absolute_accuracy):
                 raise exceptions.InvalidArgumentValueError(
                     "the count of accuracy hyperparams does not match the count of absolute_accuracy hyperparams"
