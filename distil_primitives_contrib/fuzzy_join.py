@@ -288,6 +288,76 @@ class FuzzyJoinPrimitive(
             for i in range(len(left_col))
         ]
 
+        joined_split = []
+        left_df_split = np.array_split(left_df, 4)
+        for ldf in left_df_split:
+            joined_split.append(self._produce(
+                left_df_full = left_df,
+                left_df = ldf.reset_index(drop=True),
+                right_df = right_df.copy(),
+                join_types = join_types,
+                left_col = left_col,
+                right_col = right_col,
+                accuracy = accuracy,
+                absolute_accuracy = absolute_accuracy
+            ))
+        joined = pd.concat(joined_split, ignore_index = True)
+
+        # create a new dataset to hold the joined data
+        resource_map = {}
+        float_vector_columns = {}
+        for resource_id, resource in left.items():  # type: ignore
+            if resource_id == left_resource_id:
+                for column in joined.columns:
+                    # need to avoid bug in container.Dataset, it doesn't like vector columns
+                    if type(joined[column].iloc[0]) == np.ndarray:
+                        float_vector_columns[column] = joined[column]
+                        joined[column] = np.NAN
+                resource_map[resource_id] = joined
+            else:
+                resource_map[resource_id] = resource
+
+        # Generate metadata for the dataset using only the first row of the resource for speed -
+        # metadata generation runs over each cell in the dataframe, but we only care about column
+        # level generation.  Once that's done, set the actual dataframe value.
+        result_dataset = container.Dataset(
+            {k: v.head(1) for k, v in resource_map.items()}, generate_metadata=True
+        )
+        for k, v in resource_map.items():
+            result_dataset[k] = v
+            result_dataset.metadata = result_dataset.metadata.update(
+                (k,), {"dimension": {"length": v.shape[0]}}
+            )
+
+        for key in float_vector_columns.keys():
+            df = result_dataset[left_resource_id]
+            df[key] = float_vector_columns[key]
+            float_vec_loc = df.columns.get_loc(key)
+            float_vec_col_indices = df.metadata.list_columns_with_semantic_types(
+                ("https://metadata.datadrivendiscovery.org/types/FloatVector",)
+            )
+            if float_vec_loc not in float_vec_col_indices:
+                df.metadata = df.metadata.add_semantic_type(
+                    (metadata_base.ALL_ELEMENTS, float_vec_loc),
+                    "https://metadata.datadrivendiscovery.org/types/FloatVector",
+                )
+
+        return base.CallResult(result_dataset)
+
+    def _produce(
+        self,
+        *,
+        left_df_full: container.DataFrame, # type: ignore
+        left_df: container.DataFrame,  # type: ignore
+        right_df: container.DataFrame,  # type: ignore
+        join_types: typing.Sequence[str],
+        left_col: typing.Sequence[int],
+        right_col: typing.Sequence[int],
+        accuracy: typing.Sequence[float],
+        absolute_accuracy: typing.Sequence[bool]
+    ) -> base.CallResult[Outputs]:
+
+        # cycle through the columns to join the dataframes
         right_cols_to_drop = []
         new_left_cols = []
         new_right_cols = []
@@ -358,12 +428,13 @@ class FuzzyJoinPrimitive(
                 new_right_cols += list(new_right_df.columns)
                 right_cols_to_drop.append(right_col[col_index])
             elif len(self._DATETIME_JOIN_TYPES.intersection(join_types[col_index])) > 0:
+                tolerance = self._compute_datetime_tolerance(left_df_full, left_col[col_index], right_df, right_col[col_index], accuracy[col_index])
                 new_left_df, new_right_df = self._create_datetime_merge_cols(
                     left_df,
                     left_col[col_index],
                     right_df,
                     right_col[col_index],
-                    accuracy[col_index],
+                    tolerance,
                     col_index,
                 )
                 left_df[new_left_df.columns] = new_left_df
@@ -393,46 +464,7 @@ class FuzzyJoinPrimitive(
         # also, inner merge keeps the right column we merge on, we want to remove it
         joined.drop(columns=new_left_cols + new_right_cols, inplace=True)
 
-        # create a new dataset to hold the joined data
-        resource_map = {}
-        float_vector_columns = {}
-        for resource_id, resource in left.items():  # type: ignore
-            if resource_id == left_resource_id:
-                for column in joined.columns:
-                    # need to avoid bug in container.Dataset, it doesn't like vector columns
-                    if type(joined[column][0]) == np.ndarray:
-                        float_vector_columns[column] = joined[column]
-                        joined[column] = np.NAN
-                resource_map[resource_id] = joined
-            else:
-                resource_map[resource_id] = resource
-
-        # Generate metadata for the dataset using only the first row of the resource for speed -
-        # metadata generation runs over each cell in the dataframe, but we only care about column
-        # level generation.  Once that's done, set the actual dataframe value.
-        result_dataset = container.Dataset(
-            {k: v.head(1) for k, v in resource_map.items()}, generate_metadata=True
-        )
-        for k, v in resource_map.items():
-            result_dataset[k] = v
-            result_dataset.metadata = result_dataset.metadata.update(
-                (k,), {"dimension": {"length": v.shape[0]}}
-            )
-
-        for key in float_vector_columns.keys():
-            df = result_dataset[left_resource_id]
-            df[key] = float_vector_columns[key]
-            float_vec_loc = df.columns.get_loc(key)
-            float_vec_col_indices = df.metadata.list_columns_with_semantic_types(
-                ("https://metadata.datadrivendiscovery.org/types/FloatVector",)
-            )
-            if float_vec_loc not in float_vec_col_indices:
-                df.metadata = df.metadata.add_semantic_type(
-                    (metadata_base.ALL_ELEMENTS, float_vec_loc),
-                    "https://metadata.datadrivendiscovery.org/types/FloatVector",
-                )
-
-        return base.CallResult(result_dataset)
+        return joined
 
     def multi_produce(
         self,
@@ -634,9 +666,9 @@ class FuzzyJoinPrimitive(
             it = iter(x)
             return list(zip(it, it))
 
-        if type(left_df[left_col][0]) == str:
+        if type(left_df[left_col].iloc[0]) == str:
             left_vector_length = np.fromstring(
-                left_df[left_col][0], dtype=float, sep=","
+                left_df[left_col].iloc[0], dtype=float, sep=","
             ).shape[0]
             new_left_cols = [
                 "lefty_vector" + str(index) + "_" + str(i)
@@ -650,7 +682,7 @@ class FuzzyJoinPrimitive(
                 columns=new_left_cols,
             )
         else:
-            left_vector_length = left_df[left_col][0].shape[0]
+            left_vector_length = left_df[left_col].iloc[0].shape[0]
             new_left_cols = [
                 "lefty_vector" + str(index) + "_" + str(i)
                 for i in range(int(left_vector_length/2))
@@ -659,9 +691,9 @@ class FuzzyJoinPrimitive(
                 left_df[left_col].apply(topoints).values.tolist(),
                 columns=new_left_cols,
             )
-        if type(right_df[right_col][0]) == str:
+        if type(right_df[right_col].iloc[0]) == str:
             right_vector_length = np.fromstring(
-                right_df[right_col][0], dtype=float, sep=","
+                right_df[right_col].iloc[0], dtype=float, sep=","
             ).shape[0]
             new_right_cols = [
                 "righty_vector" + str(index) + "_" + str(i)
@@ -675,7 +707,7 @@ class FuzzyJoinPrimitive(
                 columns=new_right_cols,
             )
         else:
-            right_vector_length = right_df[right_col][0].shape[0]
+            right_vector_length = right_df[right_col].iloc[0].shape[0]
             new_right_cols = [
                 "righty_vector" + str(index) + "_" + str(i)
                 for i in range(int(right_vector_length/2))
@@ -710,9 +742,9 @@ class FuzzyJoinPrimitive(
         def fromstring(x: str) -> np.ndarray:
             return np.fromstring(x, dtype=float, sep=",")
 
-        if type(left_df[left_col][0]) == str:
+        if type(left_df[left_col].iloc[0]) == str:
             left_vector_length = np.fromstring(
-                left_df[left_col][0], dtype=float, sep=","
+                left_df[left_col].iloc[0], dtype=float, sep=","
             ).shape[0]
             new_left_cols = [
                 "lefty_vector" + str(index) + "_" + str(i)
@@ -725,7 +757,7 @@ class FuzzyJoinPrimitive(
                 columns=new_left_cols,
             )
         else:
-            left_vector_length = left_df[left_col][0].shape[0]
+            left_vector_length = left_df[left_col].iloc[0].shape[0]
             new_left_cols = [
                 "lefty_vector" + str(index) + "_" + str(i)
                 for i in range(left_vector_length)
@@ -734,9 +766,9 @@ class FuzzyJoinPrimitive(
                 left_df[left_col].values.tolist(),
                 columns=new_left_cols,
             )
-        if type(right_df[right_col][0]) == str:
+        if type(right_df[right_col].iloc[0]) == str:
             right_vector_length = np.fromstring(
-                right_df[right_col][0], dtype=float, sep=","
+                right_df[right_col].iloc[0], dtype=float, sep=","
             ).shape[0]
             new_right_cols = [
                 "righty_vector" + str(index) + "_" + str(i)
@@ -749,7 +781,7 @@ class FuzzyJoinPrimitive(
                 columns=new_right_cols,
             )
         else:
-            right_vector_length = right_df[right_col][0].shape[0]
+            right_vector_length = right_df[right_col].iloc[0].shape[0]
             new_right_cols = [
                 "righty_vector" + str(index) + "_" + str(i)
                 for i in range(right_vector_length)
@@ -777,7 +809,7 @@ class FuzzyJoinPrimitive(
         left_col: str,
         right_df: container.DataFrame,
         right_col: str,
-        accuracy: float,
+        tolerance: float,
         index: int,
     ) -> pd.DataFrame:
         # use d3mIndex from left col if present
@@ -796,13 +828,12 @@ class FuzzyJoinPrimitive(
         left_keys = np.array(
             [np.datetime64(parser.parse(dt)) for dt in left_df[left_col].values]
         )
-        time_tolerance = (1.0 - accuracy) * cls._compute_time_range(left_keys, choices)
 
         new_left_df = container.DataFrame(
             {
                 left_name: np.array(
                     [
-                        cls._datetime_fuzzy_match(dt, choices, time_tolerance)
+                        cls._datetime_fuzzy_match(dt, choices, tolerance)
                         for dt in left_keys
                     ]
                 )
@@ -826,6 +857,10 @@ class FuzzyJoinPrimitive(
             ):
                 min_distance = distance
                 min_date = date
+
+        # default empty match to NaT to make it valid for datetime typing
+        if min_date is None:
+            min_date = pd.NaT
         return min_date
 
     @classmethod
@@ -841,3 +876,20 @@ class FuzzyJoinPrimitive(
         right_delta = right_max - right_min
 
         return min(left_delta, right_delta)
+
+    @classmethod
+    def _compute_datetime_tolerance(cls,
+        left_df: container.DataFrame,
+        left_col: str,
+        right_df: container.DataFrame,
+        right_col: str,
+        accuracy: float
+    ) -> typing.Dict[str, float]:
+        new_right_df = np.array(
+            [np.datetime64(parser.parse(dt)) for dt in right_df[right_col]]
+        )
+        choices = np.unique(new_right_df)
+        left_keys = np.array(
+            [np.datetime64(parser.parse(dt)) for dt in left_df[left_col].values]
+        )
+        return (1.0 - accuracy) * cls._compute_time_range(left_keys, choices)
