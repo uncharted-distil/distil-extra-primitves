@@ -7,6 +7,8 @@ import numpy as np
 
 import haversine as hs
 
+from joblib import Parallel, delayed
+
 from d3m import container, exceptions, utils as d3m_utils
 from d3m.base import utils as d3m_base_utils
 from d3m.metadata import base as metadata_base, hyperparams
@@ -23,6 +25,13 @@ Outputs = container.Dataset
 
 
 class Hyperparams(hyperparams.Hyperparams):
+    n_jobs = hyperparams.Hyperparameter[int](
+        default=-1,
+        semantic_types=[
+            "https://metadata.datadrivendiscovery.org/types/ControlParameter"
+        ],
+        description="The value of the n_jobs parameter for the joblib library",
+    )
     left_col = hyperparams.Union[typing.Union[str, typing.Sequence[str]]](
         configuration=collections.OrderedDict(
             set=hyperparams.Set(
@@ -288,19 +297,25 @@ class FuzzyJoinPrimitive(
             for i in range(len(left_col))
         ]
 
-        joined_split = []
-        left_df_split = np.array_split(left_df, 4)
-        for ldf in left_df_split:
-            joined_split.append(self._produce(
-                left_df_full = left_df,
-                left_df = ldf.reset_index(drop=True),
-                right_df = right_df.copy(),
-                join_types = join_types,
-                left_col = left_col,
-                right_col = right_col,
-                accuracy = accuracy,
-                absolute_accuracy = absolute_accuracy
-            ))
+        num_splits = 32
+        joined_split = [None for i in range(num_splits)]
+        left_df_split = np.array_split(left_df, num_splits)
+        jobs = [delayed(self._produce_threaded)(
+            index = i,
+            left_df_full = left_df,
+            left_dfs = left_df_split,
+            right_df = right_df,
+            join_types = join_types,
+            left_col = left_col,
+            right_col = right_col,
+            accuracy = accuracy,
+            absolute_accuracy = absolute_accuracy
+        ) for i in range(num_splits)]
+        joined_data = Parallel(n_jobs=self.hyperparams["n_jobs"], backend="loky", verbose=10)(jobs)
+
+        # joined data needs to maintain order to mimic none split joining
+        for i, d in joined_data:
+            joined_split[i] = d
         joined = pd.concat(joined_split, ignore_index = True)
 
         # create a new dataset to hold the joined data
@@ -343,6 +358,33 @@ class FuzzyJoinPrimitive(
                 )
 
         return base.CallResult(result_dataset)
+
+    def _produce_threaded(
+        self,
+        *,
+        index: int,
+        left_df_full: container.DataFrame, # type: ignore
+        left_dfs: typing.Sequence[container.DataFrame],  # type: ignore
+        right_df: container.DataFrame,  # type: ignore
+        join_types: typing.Sequence[str],
+        left_col: typing.Sequence[int],
+        right_col: typing.Sequence[int],
+        accuracy: typing.Sequence[float],
+        absolute_accuracy: typing.Sequence[bool]
+    ) -> typing.Tuple[int, base.CallResult[Outputs]]:
+        if left_dfs[index].empty:
+            return (index, None)
+        output = self._produce(
+            left_df_full = left_df_full,
+            left_df = left_dfs[index].reset_index(drop=True),
+            right_df = right_df.copy(),
+            join_types = join_types,
+            left_col = left_col,
+            right_col = right_col,
+            accuracy = accuracy,
+            absolute_accuracy = absolute_accuracy
+        )
+        return (index, output)
 
     def _produce(
         self,
