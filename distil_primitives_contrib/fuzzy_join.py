@@ -651,20 +651,15 @@ class FuzzyJoinPrimitive(
                 min_distance = distance
         return min_val
 
-    def _geo_fuzzy_match(match, choices, accuracy, is_absolute):
+    def _geo_fuzzy_match(match, choices, col, accuracy, is_absolute):
         # assume the accuracy is meters
         if not is_absolute:
             raise exceptions.InvalidArgumentTypeError(
                 "geo fuzzy match requires an absolute accuracy parameter that specifies the tolerance in meters"
             )
-        min_distance = float("inf")
-        min_val = None
-        for i, point in enumerate(choices):
-            distance = abs(hs.haversine(match, point, Unit.METERS))
-            if distance <= accuracy and distance <= min_distance:
-                min_val = point
-                min_distance = distance
-        return min_val
+
+        # keep the set of choices that falls within the acceptable distance
+        return choices[choices[col].map(lambda x: hs.haversine(match, x, Unit.METERS)) < accuracy]
 
     @classmethod
     def _create_numeric_merge_cols(
@@ -759,15 +754,43 @@ class FuzzyJoinPrimitive(
                 columns=new_right_cols,
             )
 
-        for i in range(len(new_left_cols)):
-            new_left_df[new_left_cols[i]] = new_left_df[new_left_cols[i]].map(
-                lambda x: cls._geo_fuzzy_match(
-                    x,
-                    new_right_df[new_right_cols[i]],
-                    accuracy,
-                    is_absolute,
-                )
-            )
+        # get a unique name to hold the possible matches
+        base_name = 'righty_lefty'
+        unique_name = base_name
+        count = 1
+        while unique_name in new_left_df.columns:
+            unique_name = base_name + f'_{count}'
+            count = count + 1
+
+        # get an initial set of possible matches (should usually be a very small subset)
+        new_left_df[unique_name] = pd.Series([cls._geo_fuzzy_match(
+            p,
+            new_right_df,
+            new_right_cols[0],
+            accuracy,
+            is_absolute
+        ) for p in new_left_df[new_left_cols[0]]])
+
+        # process the remaining vector values to narrow down the set of matches
+        # this couldve all been done in a single loop but this keep it slightly cleaner
+        for i in range(1, len(new_left_cols)):
+            new_left_df[unique_name] = pd.Series([cls._geo_fuzzy_match(
+                p,
+                f,
+                new_right_cols[i],
+                accuracy,
+                is_absolute
+            ) for (p, f) in zip(new_left_df[new_left_cols[i]], new_left_df[unique_name])])
+
+        # reduce the set of matches to either the first match or an empty set
+        # NOTE: THIS IS NOT THE BEST WAY
+        #   FOR JOINS, EITHER ALL MATCHES SHOULD BE KEPT OR ONLY THE CLOSEST MATCH SHOULD BE KEPT
+        #   THE PREVIOUS IMPLEMENTATION WAS EVEN WORSE AS IT ONLY KEPT THE NEAREST MATCH AT ANY GIVEN POINT
+        #   SO IF ONE POLYGON WAS NOT NEAREST AT EVERY POINT, THEN NO MATCH WAS MADE
+        tmp_df_left = pd.concat(new_left_df[unique_name].map(lambda x: x.head(1) if len(x) > 0 else pd.DataFrame([[None] * len(new_right_cols)], columns=new_right_cols)).tolist(), ignore_index=True)
+        new_left_df[new_left_cols] = tmp_df_left[new_right_cols]
+        new_left_df.drop(columns=[unique_name], inplace=True)
+
         return (new_left_df, new_right_df)
 
     @classmethod
