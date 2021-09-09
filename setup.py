@@ -21,9 +21,8 @@ setup(
         "pandas==1.0.3",
         # additional dependencies
         "joblib>=0.13.2",
-        "fuzzywuzzy>=0.17.0",
-        "python-Levenshtein>=0.12.0",
-        "haversine==2.3.1"
+        "haversine==2.3.1",
+        "rapidfuzz==1.5.1"
     ],
     entry_points={
         "d3m.primitives": [
