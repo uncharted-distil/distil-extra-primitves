@@ -13,8 +13,8 @@ from d3m import container, exceptions, utils as d3m_utils
 from d3m.base import utils as d3m_base_utils
 from d3m.metadata import base as metadata_base, hyperparams
 from d3m.primitive_interfaces import base, transformer
+from rapidfuzz import process
 from haversine import Unit
-from fuzzywuzzy import process
 from dateutil import parser
 import version
 
@@ -598,7 +598,7 @@ class FuzzyJoinPrimitive(
     def _string_fuzzy_match(
         cls, match: typing.Any, choices: typing.Sequence[typing.Any], min_score: float
     ) -> typing.Optional[str]:
-        choice, score = process.extractOne(match, choices)
+        choice, score, index = process.extractOne(match, choices)
         val = None
         if score >= min_score:
             val = choice
