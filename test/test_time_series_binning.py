@@ -22,7 +22,7 @@ from common_primitives.column_parser import ColumnParserPrimitive
 from d3m import exceptions
 from d3m.metadata import base as metadata_base
 
-from main/distil_primitives_contrib.time_series_binner import TimeSeriesBinnerPrimitive
+from distil_primitives_contrib.time_series_binner import TimeSeriesBinnerPrimitive
 import utils as test_utils
 
 

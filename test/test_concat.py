@@ -3,7 +3,7 @@ from os import path
 
 from d3m import container, exceptions
 from distil.primitives.column_parser import ColumnParserPrimitive
-from main/distil_primitives_contrib.concat import VerticalConcatenationPrimitive as VCPrimitive
+from distil_primitives_contrib.concat import VerticalConcatenationPrimitive as VCPrimitive
 from d3m.metadata import base as metadata_base
 
 

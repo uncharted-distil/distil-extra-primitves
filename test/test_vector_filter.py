@@ -3,7 +3,7 @@ from os import path
 import numpy as np
 
 from distil.primitives.column_parser import ColumnParserPrimitive
-from main/distil_primitives_contrib.vector_filter import VectorBoundsFilterPrimitive
+from distil_primitives_contrib.vector_filter import VectorBoundsFilterPrimitive
 from d3m.metadata import base as metadata_base
 import utils as test_utils
 
