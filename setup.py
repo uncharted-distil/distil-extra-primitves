@@ -18,7 +18,7 @@ setup(
         # shared d3m versions - need to be aligned with core package
         "scikit-learn==0.22.2.post1",
         "numpy==1.18.2",
-        "pandas>=1.1.5",
+        "pandas>=1.1.3",
         # additional dependencies
         "joblib>=0.13.2",
         "haversine==2.3.1",
